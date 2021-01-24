@@ -1,0 +1,15 @@
+ConnectedClipboard Network Protocol
+    tcp port: 5555
+    udp port: 5556
+    
+    Package format: json
+    Package example: {"IP":<userIp>, "TYPE":<PackageType>, "DATA":<clipboardData>}
+    PackageTypes
+        DISCOVER_ROOMS: (UDP broadcast) used by a user joined the network to discover existing rooms
+        RESPOND_ROOM: (TCP) used by a room owner to respond DISCOVER_ROOMS request - data : string<roomName>
+        CONNECT: (TCP) package sent by a user to a room owner in order to join to a room 
+        CONNECTION_APPROVED: (TCP) the package sent from the room owner to the new member with a list of members - data : list<ipaddresses>
+        INTRODUCE_NEW_MEMBER: (TCP) the package sent from the room owner to existing members with the new members ip - data : string<ipaddress>
+        DISCONNECT: (TCP) the package sent from a member to the room owner indicating it left the room
+        MEMBER_DISCONNECTED: (TCP) the package sent from the room owner to existing members with the old members ip - data : string<ipaddress>
+        CLIPBOARD: (TCP) used to transfer the changed clipboard from a user to room members - data : string<clipboardContent>
