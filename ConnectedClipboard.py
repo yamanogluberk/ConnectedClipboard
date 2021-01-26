@@ -14,6 +14,7 @@ members = []  # item - (str) ipaddress
 current_room_ip = ""
 my_room_name = ""  # only room owner has this data
 discovered_rooms = set()  # item - (roomname, roomip)
+REQUESTED_ROOM = ("", "")
 
 is_main_ui = True
 input_active = True
@@ -69,6 +70,8 @@ def input_ui():
         else:
             if cmd.strip() == "/leave":
                 leave_room()
+            elif cmd.strip() == "/list":
+                list_users()
 
 
 def main_ui_info():
@@ -93,13 +96,13 @@ def main_ui_info():
 
 
 def room_ui_info():
-
     print()
     print(f"There are {len(members)} members in the room!")
     print()
     print("          *********************************************         ")
     print()
     print("Type /leave to leave the current room")
+    print("Type /list to list users in the room")
     print()
     print("          *********************************************         ")
 
@@ -120,9 +123,11 @@ def create_new_room(room_name):
 def join_room(room_name):
     global is_main_ui
     global input_active
+    global REQUESTED_ROOM
     for item in discovered_rooms:
         if room_name == item[0]:
             send_connect(item[1])
+            REQUESTED_ROOM = item
             return
     print()
     print("This room doesnt exist!")
@@ -134,12 +139,31 @@ def leave_room():
     global current_room_ip
     global members
     global is_main_ui
+    global my_room_name
 
-    send_disconnect(current_room_ip)
-    current_room_ip = ""
-    members.clear()
-    main_ui_info()
-    is_main_ui = True
+    if current_room_ip == ip:  # DISBAND GROUP
+        for mem in members:
+            if mem != ip:
+                send_kick(mem)
+        current_room_ip = ""
+        my_room_name = ""
+        members.clear()
+        main_ui_info()
+        is_main_ui = True
+    else:  # LEAVE GROUP
+        send_disconnect(current_room_ip)
+        current_room_ip = ""
+        members.clear()
+        main_ui_info()
+        is_main_ui = True
+
+
+def list_users():
+    k = 1
+    print("Current users:")
+    for mem in members:
+        print(str(k) + " -> " + mem)
+        k = k + 1
 
 
 def terminate():
@@ -209,6 +233,8 @@ def infer_data(data):
             new_member_received(data)
         elif data["TYPE"] == "MEMBER_DISCONNECTED":
             member_disconnected_received(data)
+        elif data["TYPE"] == "KICK":
+            kick_received(data)
         elif data["TYPE"] == "CLIPBOARD":
             clipboard_received(data)
     except:
@@ -231,13 +257,22 @@ def connect_received(data):
     if my_room_name.strip() == "":
         print("Received connect when there is no owned room!!!")
         return
+    elif data["IP"] in members:
+        pass
     else:
+        for mem in members:
+            if mem != ip:
+                send_new_member(mem, data["IP"])
+        members.append(data["IP"])
         send_connection_approved(data["IP"])
-        # TODO send new user to current members
 
 
 def disconnect_received(data):
-    print("disconnect")
+    if data["IP"] in members:
+        members.remove(data["IP"])
+        for mem in members:
+            if mem != ip:
+                send_member_disconnected(mem, data["IP"])
 
 
 def connection_approved_received(data):
@@ -245,21 +280,38 @@ def connection_approved_received(data):
     global members
     global is_main_ui
     global input_active
+    global REQUESTED_ROOM
 
-    current_room_ip = data["IP"]
-    members = data["DATA"]
-    is_main_ui = False
-    input_active = True
-    room_ui_info()
+    if current_room_ip == "" and REQUESTED_ROOM[1] == data["IP"]:
+        REQUESTED_ROOM = ("", "")
+        current_room_ip = data["IP"]
+        members = data["DATA"]
+        is_main_ui = False
+        input_active = True
+        room_ui_info()
 
 
 def new_member_received(data):
-    2 + 3
+    if (data["IP"] == current_room_ip) and (data["DATA"] not in members):
+        members.append(data["DATA"])
 
 
 def member_disconnected_received(data):
-    2 + 3
+    if (data["IP"] == current_room_ip) and (data["DATA"] in members):
+        members.remove(data["DATA"])
 
+
+def kick_received(data):
+    global current_room_ip
+    global members
+    global is_main_ui
+    global my_room_name
+
+    if data["IP"] == current_room_ip:
+        current_room_ip = ""
+        members.clear()
+        main_ui_info()
+        is_main_ui = True
 
 def clipboard_received(data):
     2 + 3
@@ -282,6 +334,11 @@ def send_connect(target_ip):
 
 def send_disconnect(target_ip):
     data = f"{get_json('DISCONNECT')}"
+    send_message_tcp(data, target_ip)
+
+
+def send_kick(target_ip):
+    data = f"{get_json('KICK')}"
     send_message_tcp(data, target_ip)
 
 
@@ -330,7 +387,7 @@ def send_message_thread(packet, destination):
         print("!! Unexpected offline member detected !!")
 
 
-def get_json(typename, data=None):
+def get_json(typename, data=None, status=None):
     packet = {"IP": ip, "TYPE": typename, "DATA": data}
     return json.dumps(packet)
 
