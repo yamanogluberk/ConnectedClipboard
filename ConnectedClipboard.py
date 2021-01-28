@@ -2,6 +2,8 @@ import select
 import socket
 import json
 import threading
+import time
+import clipboard
 
 ip = ""
 localpart = ""
@@ -15,6 +17,7 @@ current_room_ip = ""
 my_room_name = ""  # only room owner has this data
 discovered_rooms = set()  # item - (roomname, roomip)
 REQUESTED_ROOM = ("", "")
+CLIPBOARD_DATA = clipboard.paste()
 
 is_main_ui = True
 input_active = True
@@ -37,11 +40,16 @@ def main():
     listen_tcp.setDaemon(True)
     listen_tcp.start()
 
+    listen_cb = threading.Thread(target=listening_clipboard)
+    listen_cb.setDaemon(True)
+    listen_cb.start()
+
     send_discover()
 
     main_ui_info()
     input_ui()
 
+    listen_cb.join()
     listen_udp.join()
     listen_tcp.join()
 
@@ -313,8 +321,29 @@ def kick_received(data):
         main_ui_info()
         is_main_ui = True
 
+
+def listening_clipboard():
+    global CLIPBOARD_DATA
+    while True:
+        current_clipboard = clipboard.paste()
+        if CLIPBOARD_DATA != current_clipboard:
+            print("CLIPBOARD DATA CHANGED")
+            for mem in members:
+                if mem != ip:
+                    send_clipboard(mem, current_clipboard)
+            CLIPBOARD_DATA = current_clipboard
+        time.sleep(0)
+
+
 def clipboard_received(data):
-    2 + 3
+    global CLIPBOARD_DATA
+    CLIPBOARD_DATA = data["DATA"]
+    clipboard.copy(CLIPBOARD_DATA)
+
+
+def send_clipboard(target_ip, clipboard_data):
+    data = f"{get_json('CLIPBOARD', clipboard_data)}"
+    send_message_tcp(data, target_ip)
 
 
 def send_discover():
@@ -387,7 +416,7 @@ def send_message_thread(packet, destination):
         print("!! Unexpected offline member detected !!")
 
 
-def get_json(typename, data=None, status=None):
+def get_json(typename, data=None):
     packet = {"IP": ip, "TYPE": typename, "DATA": data}
     return json.dumps(packet)
 
