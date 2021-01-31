@@ -18,6 +18,7 @@ my_room_name = ""  # only room owner has this data
 discovered_rooms = set()  # item - (roomname, roomip)
 REQUESTED_ROOM = ("", "")
 CLIPBOARD_DATA = clipboard.paste()
+CLIPBOARD_LOCK = threading.Lock()
 
 is_main_ui = True
 input_active = True
@@ -91,7 +92,7 @@ def main_ui_info():
         for item in discovered_rooms:
             print("Active rooms:")
             print()
-            print(item[1])
+            print(item[0])
             print()
     print("          *********************************************         ")
     print()
@@ -325,20 +326,22 @@ def kick_received(data):
 def listening_clipboard():
     global CLIPBOARD_DATA
     while True:
-        current_clipboard = clipboard.paste()
-        if CLIPBOARD_DATA != current_clipboard:
-            print("CLIPBOARD DATA CHANGED")
-            for mem in members:
-                if mem != ip:
-                    send_clipboard(mem, current_clipboard)
-            CLIPBOARD_DATA = current_clipboard
-        time.sleep(0)
+        with CLIPBOARD_LOCK:
+            current_clipboard = clipboard.paste()
+            if CLIPBOARD_DATA != current_clipboard:
+                print("CLIPBOARD DATA CHANGED")
+                for mem in members:
+                    if mem != ip:
+                        send_clipboard(mem, current_clipboard)
+                CLIPBOARD_DATA = current_clipboard
+            time.sleep(0)
 
 
 def clipboard_received(data):
     global CLIPBOARD_DATA
-    CLIPBOARD_DATA = data["DATA"]
-    clipboard.copy(CLIPBOARD_DATA)
+    with CLIPBOARD_LOCK:
+        CLIPBOARD_DATA = data["DATA"]
+        clipboard.copy(CLIPBOARD_DATA)
 
 
 def send_clipboard(target_ip, clipboard_data):
