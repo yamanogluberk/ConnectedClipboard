@@ -14,3 +14,7 @@ ConnectedClipboard Network Protocol
         MEMBER_DISCONNECTED: (TCP) the package sent from the room owner to existing members with the old members ip - data : string<ipaddress>
         CLIPBOARD: (TCP) used to transfer the changed clipboard from a user to room members - data : string<clipboardContent>
         KICK: (TCP) used to kick other user from group - data : string<group_ip>
+        PING: (TCP)
+        PING_RESPOND: (TCP)
+        REQUEST_TIMESTAMP: (TCP)
+        RECEIVE_TIMESTAMP: (TCP)
