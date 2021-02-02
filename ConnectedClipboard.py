@@ -4,6 +4,7 @@ import json
 import threading
 import time
 import clipboard
+from datetime import datetime
 
 ip = ""
 localpart = ""
@@ -12,6 +13,7 @@ tcp = 5555
 udp = 5556
 buffer_size = 1024
 broadcast_try_count = 3
+ping_try_count = 3
 members = []  # item - (str) ipaddress
 current_room_ip = ""
 my_room_name = ""  # only room owner has this data
@@ -19,7 +21,12 @@ discovered_rooms = set()  # item - (roomname, roomip)
 REQUESTED_ROOM = ("", "")
 CLIPBOARD_DATA = clipboard.paste()
 CLIPBOARD_LOCK = threading.Lock()
-
+DATA_LOCK = threading.Lock()
+SHARED_TIME_BASE = 0
+PRIVATE_TIME_BASE = 0
+LATENCY = 0
+RECEIVED_PING_COUNTER = 0
+LAST_CHANGED_TS = 0
 is_main_ui = True
 input_active = True
 
@@ -149,6 +156,10 @@ def leave_room():
     global members
     global is_main_ui
     global my_room_name
+    global SHARED_TIME_BASE
+    global PRIVATE_TIME_BASE
+    global LATENCY
+    global RECEIVED_PING_COUNTER
 
     if current_room_ip == ip:  # DISBAND GROUP
         for mem in members:
@@ -165,6 +176,11 @@ def leave_room():
         members.clear()
         main_ui_info()
         is_main_ui = True
+
+    SHARED_TIME_BASE = 0
+    PRIVATE_TIME_BASE = 0
+    LATENCY = 0
+    RECEIVED_PING_COUNTER = 0
 
 
 def list_users():
@@ -246,6 +262,14 @@ def infer_data(data):
             kick_received(data)
         elif data["TYPE"] == "CLIPBOARD":
             clipboard_received(data)
+        elif data["TYPE"] == "PING":
+            ping_received(data)
+        elif data["TYPE"] == "PING_RESPOND":
+            ping_respond_received(data)
+        elif data["TYPE"] == "REQUEST_TIMESTAMP":
+            receive_timestamp_request(data)
+        elif data["TYPE"] == "RECEIVE TIMESTAMP":
+            receive_timestamp(data)
     except:
         print("The received packet is not Json or not the proper practice of the protocol!")
 
@@ -290,6 +314,8 @@ def connection_approved_received(data):
     global is_main_ui
     global input_active
     global REQUESTED_ROOM
+    global LATENCY
+    global RECEIVED_PING_COUNTER
 
     if current_room_ip == "" and REQUESTED_ROOM[1] == data["IP"]:
         REQUESTED_ROOM = ("", "")
@@ -298,6 +324,77 @@ def connection_approved_received(data):
         is_main_ui = False
         input_active = True
         room_ui_info()
+        for x in range(ping_try_count):
+            send_ping(current_room_ip)
+            with DATA_LOCK:
+                LATENCY = LATENCY - datetime.now().timestamp()
+        counter = 0
+        while RECEIVED_PING_COUNTER != ping_try_count:
+            time.sleep(0.1)
+            counter = counter + 1
+            if counter > 100:
+                return
+        send_timestamp_request(current_room_ip)
+
+
+def send_ping(target_ip):
+    data = f"{get_json('PING')}"
+    send_message_tcp(data, target_ip)
+
+
+def send_ping_respond(target_ip):
+    data = f"{get_json('PING_RESPOND')}"
+    send_message_tcp(data, target_ip)
+
+
+def ping_received(data):
+    global current_room_ip
+
+    if current_room_ip == ip and data["IP"] in members:
+        send_ping_respond(data["IP"])
+
+
+def ping_respond_received(data):
+    global current_room_ip
+    global LATENCY
+    global RECEIVED_PING_COUNTER
+
+    if current_room_ip == data["IP"]:
+        with DATA_LOCK:
+            LATENCY = LATENCY + datetime.now().timestamp()
+            print("PING LATENCY --> " + str(LATENCY))
+            RECEIVED_PING_COUNTER = RECEIVED_PING_COUNTER + 1
+
+
+def send_timestamp_request(target_ip):
+    data = f"{get_json('REQUEST_TIMESTAMP')}"
+    send_message_tcp(data, target_ip)
+
+
+def receive_timestamp_request(data):
+    global current_room_ip
+
+    if current_room_ip == ip and data["IP"] in members:
+        send_ping_respond(data["IP"])
+
+
+def send_timestamp(target_ip):
+    ct = datetime.now().timestamp()
+    data = f"{get_json('RECEIVE TIMESTAMP', ct)}"
+    send_message_tcp(data, target_ip)
+
+
+def receive_timestamp(data):
+    global SHARED_TIME_BASE
+    global PRIVATE_TIME_BASE
+
+    if current_room_ip == data["IP"]:
+        SHARED_TIME_BASE = data["DATA"]
+        SHARED_TIME_BASE = SHARED_TIME_BASE + (LATENCY / (ping_try_count * 2))
+        PRIVATE_TIME_BASE = datetime.now().timestamp()
+        print("LATENCY --> " + str((LATENCY / (ping_try_count * 2))))
+        print("SHARED_TIME_BASE --> " + str(SHARED_TIME_BASE))
+        print("PRIVATE_TIME_BASE --> " + str(PRIVATE_TIME_BASE))
 
 
 def new_member_received(data):
@@ -315,37 +412,53 @@ def kick_received(data):
     global members
     global is_main_ui
     global my_room_name
+    global RECEIVED_PING_COUNTER
+    global SHARED_TIME_BASE
+    global PRIVATE_TIME_BASE
+    global LATENCY
 
     if data["IP"] == current_room_ip:
         current_room_ip = ""
         members.clear()
         main_ui_info()
         is_main_ui = True
+        SHARED_TIME_BASE = 0
+        PRIVATE_TIME_BASE = 0
+        LATENCY = 0
+        RECEIVED_PING_COUNTER = 0
 
 
 def listening_clipboard():
     global CLIPBOARD_DATA
+    global LAST_CHANGED_TS
+
     while True:
         with CLIPBOARD_LOCK:
             current_clipboard = clipboard.paste()
             if CLIPBOARD_DATA != current_clipboard:
                 print("CLIPBOARD DATA CHANGED")
+                clipboard_ts = SHARED_TIME_BASE + (datetime.now().timestamp() - PRIVATE_TIME_BASE)
                 for mem in members:
                     if mem != ip:
-                        send_clipboard(mem, current_clipboard)
+                        send_clipboard(mem, clipboard_ts, current_clipboard)
                 CLIPBOARD_DATA = current_clipboard
-            time.sleep(0)
+                LAST_CHANGED_TS = clipboard_ts
+            time.sleep(0.1)
 
 
 def clipboard_received(data):
     global CLIPBOARD_DATA
+    global LAST_CHANGED_TS
+
     with CLIPBOARD_LOCK:
         CLIPBOARD_DATA = data["DATA"]
-        clipboard.copy(CLIPBOARD_DATA)
+        if LAST_CHANGED_TS < data["TIMESTAMP"]:
+            LAST_CHANGED_TS = data["TIMESTAMP"]
+            clipboard.copy(CLIPBOARD_DATA)
 
 
-def send_clipboard(target_ip, clipboard_data):
-    data = f"{get_json('CLIPBOARD', clipboard_data)}"
+def send_clipboard(target_ip, clipboard_ts, clipboard_data):
+    data = f"{get_json('CLIPBOARD', clipboard_ts, clipboard_data)}"
     send_message_tcp(data, target_ip)
 
 
@@ -389,11 +502,6 @@ def send_member_disconnected(target_ip, member_ip):
     send_message_tcp(data, target_ip)
 
 
-def send_clipboard(target_ip, clipboard_content):
-    data = f"{get_json('CLIPBOARD', clipboard_content)}"
-    send_message_tcp(data, target_ip)
-
-
 def send_broadcast(data):
     for x in range(broadcast_try_count):
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -421,6 +529,11 @@ def send_message_thread(packet, destination):
 
 def get_json(typename, data=None):
     packet = {"IP": ip, "TYPE": typename, "DATA": data}
+    return json.dumps(packet)
+
+
+def get_json(typename, timestamp, data):
+    packet = {"IP": ip, "TYPE": typename, "TIMESTAMP": timestamp, "DATA": data}
     return json.dumps(packet)
 
 
