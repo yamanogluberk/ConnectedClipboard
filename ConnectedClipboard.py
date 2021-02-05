@@ -236,7 +236,10 @@ def start_listening_tcp():
                     if not temp:
                         break
                     data += temp.decode()
-                infer_data(data)
+                handle_tcp_req = threading.Thread(target=infer_data, args=(data,))
+                handle_tcp_req.setDaemon(True)
+                handle_tcp_req.start()
+                #infer_data(data)
 
 
 def infer_data(data):
@@ -362,7 +365,7 @@ def ping_respond_received(data):
     if current_room_ip == data["IP"]:
         with DATA_LOCK:
             LATENCY = LATENCY + datetime.now().timestamp()
-            print("PING LATENCY --> " + str(LATENCY))
+            #print("PING RESPOND RECEIVED::PING LATENCY --> " + str(LATENCY))
             RECEIVED_PING_COUNTER = RECEIVED_PING_COUNTER + 1
 
 
@@ -375,7 +378,7 @@ def receive_timestamp_request(data):
     global current_room_ip
 
     if current_room_ip == ip and data["IP"] in members:
-        send_ping_respond(data["IP"])
+        send_timestamp(data["IP"])
 
 
 def send_timestamp(target_ip):
