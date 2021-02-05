@@ -458,7 +458,7 @@ def clipboard_received(data):
 
 
 def send_clipboard(target_ip, clipboard_ts, clipboard_data):
-    data = f"{get_json('CLIPBOARD', clipboard_ts, clipboard_data)}"
+    data = f"{get_json_ts('CLIPBOARD', clipboard_ts, clipboard_data)}"
     send_message_tcp(data, target_ip)
 
 
@@ -532,7 +532,7 @@ def get_json(typename, data=None):
     return json.dumps(packet)
 
 
-def get_json(typename, timestamp, data):
+def get_json_ts(typename, timestamp, data):
     packet = {"IP": ip, "TYPE": typename, "TIMESTAMP": timestamp, "DATA": data}
     return json.dumps(packet)
 
