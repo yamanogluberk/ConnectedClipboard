@@ -2,6 +2,9 @@ import select
 import socket
 import json
 import threading
+import time
+import clipboard
+from datetime import datetime
 
 ip = ""
 localpart = ""
@@ -10,11 +13,20 @@ tcp = 5555
 udp = 5556
 buffer_size = 1024
 broadcast_try_count = 3
+ping_try_count = 3
 members = []  # item - (str) ipaddress
 current_room_ip = ""
 my_room_name = ""  # only room owner has this data
 discovered_rooms = set()  # item - (roomname, roomip)
-
+REQUESTED_ROOM = ("", "")
+CLIPBOARD_DATA = clipboard.paste()
+CLIPBOARD_LOCK = threading.Lock()
+DATA_LOCK = threading.Lock()
+SHARED_TIME_BASE = 0
+PRIVATE_TIME_BASE = 0
+LATENCY = 0
+RECEIVED_PING_COUNTER = 0
+LAST_CHANGED_TS = 0
 is_main_ui = True
 input_active = True
 
@@ -36,11 +48,16 @@ def main():
     listen_tcp.setDaemon(True)
     listen_tcp.start()
 
+    listen_cb = threading.Thread(target=listening_clipboard)
+    listen_cb.setDaemon(True)
+    listen_cb.start()
+
     send_discover()
 
     main_ui_info()
     input_ui()
 
+    listen_cb.join()
     listen_udp.join()
     listen_tcp.join()
 
@@ -69,6 +86,8 @@ def input_ui():
         else:
             if cmd.strip() == "/leave":
                 leave_room()
+            elif cmd.strip() == "/list":
+                list_users()
 
 
 def main_ui_info():
@@ -80,7 +99,7 @@ def main_ui_info():
         for item in discovered_rooms:
             print("Active rooms:")
             print()
-            print(item[1])
+            print(item[0])
             print()
     print("          *********************************************         ")
     print()
@@ -93,13 +112,13 @@ def main_ui_info():
 
 
 def room_ui_info():
-
     print()
     print(f"There are {len(members)} members in the room!")
     print()
     print("          *********************************************         ")
     print()
     print("Type /leave to leave the current room")
+    print("Type /list to list users in the room")
     print()
     print("          *********************************************         ")
 
@@ -120,9 +139,11 @@ def create_new_room(room_name):
 def join_room(room_name):
     global is_main_ui
     global input_active
+    global REQUESTED_ROOM
     for item in discovered_rooms:
         if room_name == item[0]:
             send_connect(item[1])
+            REQUESTED_ROOM = item
             return
     print()
     print("This room doesnt exist!")
@@ -134,12 +155,40 @@ def leave_room():
     global current_room_ip
     global members
     global is_main_ui
+    global my_room_name
+    global SHARED_TIME_BASE
+    global PRIVATE_TIME_BASE
+    global LATENCY
+    global RECEIVED_PING_COUNTER
 
-    send_disconnect(current_room_ip)
-    current_room_ip = ""
-    members.clear()
-    main_ui_info()
-    is_main_ui = True
+    if current_room_ip == ip:  # DISBAND GROUP
+        for mem in members:
+            if mem != ip:
+                send_kick(mem)
+        current_room_ip = ""
+        my_room_name = ""
+        members.clear()
+        main_ui_info()
+        is_main_ui = True
+    else:  # LEAVE GROUP
+        send_disconnect(current_room_ip)
+        current_room_ip = ""
+        members.clear()
+        main_ui_info()
+        is_main_ui = True
+
+    SHARED_TIME_BASE = 0
+    PRIVATE_TIME_BASE = 0
+    LATENCY = 0
+    RECEIVED_PING_COUNTER = 0
+
+
+def list_users():
+    k = 1
+    print("Current users:")
+    for mem in members:
+        print(str(k) + " -> " + mem)
+        k = k + 1
 
 
 def terminate():
@@ -209,8 +258,18 @@ def infer_data(data):
             new_member_received(data)
         elif data["TYPE"] == "MEMBER_DISCONNECTED":
             member_disconnected_received(data)
+        elif data["TYPE"] == "KICK":
+            kick_received(data)
         elif data["TYPE"] == "CLIPBOARD":
             clipboard_received(data)
+        elif data["TYPE"] == "PING":
+            ping_received(data)
+        elif data["TYPE"] == "PING_RESPOND":
+            ping_respond_received(data)
+        elif data["TYPE"] == "REQUEST_TIMESTAMP":
+            receive_timestamp_request(data)
+        elif data["TYPE"] == "RECEIVE TIMESTAMP":
+            receive_timestamp(data)
     except:
         print("The received packet is not Json or not the proper practice of the protocol!")
 
@@ -231,13 +290,22 @@ def connect_received(data):
     if my_room_name.strip() == "":
         print("Received connect when there is no owned room!!!")
         return
+    elif data["IP"] in members:
+        pass
     else:
+        for mem in members:
+            if mem != ip:
+                send_new_member(mem, data["IP"])
+        members.append(data["IP"])
         send_connection_approved(data["IP"])
-        # TODO send new user to current members
 
 
 def disconnect_received(data):
-    print("disconnect")
+    if data["IP"] in members:
+        members.remove(data["IP"])
+        for mem in members:
+            if mem != ip:
+                send_member_disconnected(mem, data["IP"])
 
 
 def connection_approved_received(data):
@@ -245,24 +313,153 @@ def connection_approved_received(data):
     global members
     global is_main_ui
     global input_active
+    global REQUESTED_ROOM
+    global LATENCY
+    global RECEIVED_PING_COUNTER
 
-    current_room_ip = data["IP"]
-    members = data["DATA"]
-    is_main_ui = False
-    input_active = True
-    room_ui_info()
+    if current_room_ip == "" and REQUESTED_ROOM[1] == data["IP"]:
+        REQUESTED_ROOM = ("", "")
+        current_room_ip = data["IP"]
+        members = data["DATA"]
+        is_main_ui = False
+        input_active = True
+        room_ui_info()
+        for x in range(ping_try_count):
+            send_ping(current_room_ip)
+            with DATA_LOCK:
+                LATENCY = LATENCY - datetime.now().timestamp()
+        counter = 0
+        while RECEIVED_PING_COUNTER != ping_try_count:
+            time.sleep(0.1)
+            counter = counter + 1
+            if counter > 100:
+                return
+        send_timestamp_request(current_room_ip)
+
+
+def send_ping(target_ip):
+    data = f"{get_json('PING')}"
+    send_message_tcp(data, target_ip)
+
+
+def send_ping_respond(target_ip):
+    data = f"{get_json('PING_RESPOND')}"
+    send_message_tcp(data, target_ip)
+
+
+def ping_received(data):
+    global current_room_ip
+
+    if current_room_ip == ip and data["IP"] in members:
+        send_ping_respond(data["IP"])
+
+
+def ping_respond_received(data):
+    global current_room_ip
+    global LATENCY
+    global RECEIVED_PING_COUNTER
+
+    if current_room_ip == data["IP"]:
+        with DATA_LOCK:
+            LATENCY = LATENCY + datetime.now().timestamp()
+            print("PING LATENCY --> " + str(LATENCY))
+            RECEIVED_PING_COUNTER = RECEIVED_PING_COUNTER + 1
+
+
+def send_timestamp_request(target_ip):
+    data = f"{get_json('REQUEST_TIMESTAMP')}"
+    send_message_tcp(data, target_ip)
+
+
+def receive_timestamp_request(data):
+    global current_room_ip
+
+    if current_room_ip == ip and data["IP"] in members:
+        send_ping_respond(data["IP"])
+
+
+def send_timestamp(target_ip):
+    ct = datetime.now().timestamp()
+    data = f"{get_json('RECEIVE TIMESTAMP', ct)}"
+    send_message_tcp(data, target_ip)
+
+
+def receive_timestamp(data):
+    global SHARED_TIME_BASE
+    global PRIVATE_TIME_BASE
+
+    if current_room_ip == data["IP"]:
+        SHARED_TIME_BASE = data["DATA"]
+        SHARED_TIME_BASE = SHARED_TIME_BASE + (LATENCY / (ping_try_count * 2))
+        PRIVATE_TIME_BASE = datetime.now().timestamp()
+        print("LATENCY --> " + str((LATENCY / (ping_try_count * 2))))
+        print("SHARED_TIME_BASE --> " + str(SHARED_TIME_BASE))
+        print("PRIVATE_TIME_BASE --> " + str(PRIVATE_TIME_BASE))
 
 
 def new_member_received(data):
-    2 + 3
+    if (data["IP"] == current_room_ip) and (data["DATA"] not in members):
+        members.append(data["DATA"])
 
 
 def member_disconnected_received(data):
-    2 + 3
+    if (data["IP"] == current_room_ip) and (data["DATA"] in members):
+        members.remove(data["DATA"])
+
+
+def kick_received(data):
+    global current_room_ip
+    global members
+    global is_main_ui
+    global my_room_name
+    global RECEIVED_PING_COUNTER
+    global SHARED_TIME_BASE
+    global PRIVATE_TIME_BASE
+    global LATENCY
+
+    if data["IP"] == current_room_ip:
+        current_room_ip = ""
+        members.clear()
+        main_ui_info()
+        is_main_ui = True
+        SHARED_TIME_BASE = 0
+        PRIVATE_TIME_BASE = 0
+        LATENCY = 0
+        RECEIVED_PING_COUNTER = 0
+
+
+def listening_clipboard():
+    global CLIPBOARD_DATA
+    global LAST_CHANGED_TS
+
+    while True:
+        with CLIPBOARD_LOCK:
+            current_clipboard = clipboard.paste()
+            if CLIPBOARD_DATA != current_clipboard:
+                print("CLIPBOARD DATA CHANGED")
+                clipboard_ts = SHARED_TIME_BASE + (datetime.now().timestamp() - PRIVATE_TIME_BASE)
+                for mem in members:
+                    if mem != ip:
+                        send_clipboard(mem, clipboard_ts, current_clipboard)
+                CLIPBOARD_DATA = current_clipboard
+                LAST_CHANGED_TS = clipboard_ts
+            time.sleep(0.1)
 
 
 def clipboard_received(data):
-    2 + 3
+    global CLIPBOARD_DATA
+    global LAST_CHANGED_TS
+
+    with CLIPBOARD_LOCK:
+        CLIPBOARD_DATA = data["DATA"]
+        if LAST_CHANGED_TS < data["TIMESTAMP"]:
+            LAST_CHANGED_TS = data["TIMESTAMP"]
+            clipboard.copy(CLIPBOARD_DATA)
+
+
+def send_clipboard(target_ip, clipboard_ts, clipboard_data):
+    data = f"{get_json_ts('CLIPBOARD', clipboard_ts, clipboard_data)}"
+    send_message_tcp(data, target_ip)
 
 
 def send_discover():
@@ -285,6 +482,11 @@ def send_disconnect(target_ip):
     send_message_tcp(data, target_ip)
 
 
+def send_kick(target_ip):
+    data = f"{get_json('KICK')}"
+    send_message_tcp(data, target_ip)
+
+
 def send_connection_approved(target_ip):
     data = f"{get_json('CONNECTION_APPROVED', members)}"
     send_message_tcp(data, target_ip)
@@ -297,11 +499,6 @@ def send_new_member(target_ip, member_ip):
 
 def send_member_disconnected(target_ip, member_ip):
     data = f"{get_json('MEMBER_DISCONNECTED', member_ip)}"
-    send_message_tcp(data, target_ip)
-
-
-def send_clipboard(target_ip, clipboard_content):
-    data = f"{get_json('CLIPBOARD', clipboard_content)}"
     send_message_tcp(data, target_ip)
 
 
@@ -332,6 +529,11 @@ def send_message_thread(packet, destination):
 
 def get_json(typename, data=None):
     packet = {"IP": ip, "TYPE": typename, "DATA": data}
+    return json.dumps(packet)
+
+
+def get_json_ts(typename, timestamp, data):
+    packet = {"IP": ip, "TYPE": typename, "TIMESTAMP": timestamp, "DATA": data}
     return json.dumps(packet)
 
 
