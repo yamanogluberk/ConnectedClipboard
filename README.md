@@ -42,6 +42,10 @@ ConnectedClipboard is a local network application for Mac/Windows and Android. I
 - Once you are in a room, you can start copy/pastein' across devicess.
 
 
+## Third Party Libraries Used
+
+- clipboard.py  https://pypi.org/project/clipboard/
+
 ## Contributing
 Pull requests are welcome. For major changes, please open an issue first to discuss what you would like to change.
 
