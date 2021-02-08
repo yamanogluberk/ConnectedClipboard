@@ -194,7 +194,7 @@ public class ClipboardListener extends Service {
 
     private void PingReceived(String receivedJson) {
         String ip = Utils.GetIPFromJSON(receivedJson);
-        if (currentRoomIp.equals(ip) && members.contains(ip))
+        if (isServer && members.contains(ip))
             SendPingRespond(ip);
     }
 
