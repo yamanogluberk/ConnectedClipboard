@@ -440,7 +440,6 @@ def listening_clipboard():
         with CLIPBOARD_LOCK:
             current_clipboard = clipboard.paste()
             if CLIPBOARD_DATA != current_clipboard:
-                print("CLIPBOARD DATA CHANGED")
                 clipboard_ts = SHARED_TIME_BASE + (get_current_timestamp() - PRIVATE_TIME_BASE)
                 for mem in members:
                     if mem != ip:
@@ -455,8 +454,8 @@ def clipboard_received(data):
     global LAST_CHANGED_TS
 
     with CLIPBOARD_LOCK:
-        CLIPBOARD_DATA = data["DATA"]
         if LAST_CHANGED_TS < data["TIMESTAMP"]:
+            CLIPBOARD_DATA = data["DATA"]
             LAST_CHANGED_TS = data["TIMESTAMP"]
             clipboard.copy(CLIPBOARD_DATA)
 
