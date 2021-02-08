@@ -4,6 +4,7 @@ import json
 import threading
 import time
 import clipboard
+import math
 from datetime import datetime
 
 ip = ""
@@ -330,7 +331,7 @@ def connection_approved_received(data):
         for x in range(ping_try_count):
             send_ping(current_room_ip)
             with DATA_LOCK:
-                LATENCY = LATENCY - datetime.now().timestamp()
+                LATENCY = LATENCY - get_current_timestamp()
         counter = 0
         while RECEIVED_PING_COUNTER != ping_try_count:
             time.sleep(0.1)
@@ -364,7 +365,7 @@ def ping_respond_received(data):
 
     if current_room_ip == data["IP"]:
         with DATA_LOCK:
-            LATENCY = LATENCY + datetime.now().timestamp()
+            LATENCY = LATENCY + get_current_timestamp()
             #print("PING RESPOND RECEIVED::PING LATENCY --> " + str(LATENCY))
             RECEIVED_PING_COUNTER = RECEIVED_PING_COUNTER + 1
 
@@ -382,7 +383,7 @@ def receive_timestamp_request(data):
 
 
 def send_timestamp(target_ip):
-    ct = datetime.now().timestamp()
+    ct = get_current_timestamp()
     data = f"{get_json('RECEIVE TIMESTAMP', ct)}"
     send_message_tcp(data, target_ip)
 
@@ -394,7 +395,7 @@ def receive_timestamp(data):
     if current_room_ip == data["IP"]:
         SHARED_TIME_BASE = data["DATA"]
         SHARED_TIME_BASE = SHARED_TIME_BASE + (LATENCY / (ping_try_count * 2))
-        PRIVATE_TIME_BASE = datetime.now().timestamp()
+        PRIVATE_TIME_BASE = get_current_timestamp()
         print("LATENCY --> " + str((LATENCY / (ping_try_count * 2))))
         print("SHARED_TIME_BASE --> " + str(SHARED_TIME_BASE))
         print("PRIVATE_TIME_BASE --> " + str(PRIVATE_TIME_BASE))
@@ -440,7 +441,7 @@ def listening_clipboard():
             current_clipboard = clipboard.paste()
             if CLIPBOARD_DATA != current_clipboard:
                 print("CLIPBOARD DATA CHANGED")
-                clipboard_ts = SHARED_TIME_BASE + (datetime.now().timestamp() - PRIVATE_TIME_BASE)
+                clipboard_ts = SHARED_TIME_BASE + (get_current_timestamp() - PRIVATE_TIME_BASE)
                 for mem in members:
                     if mem != ip:
                         send_clipboard(mem, clipboard_ts, current_clipboard)
@@ -538,6 +539,12 @@ def get_json(typename, data=None):
 def get_json_ts(typename, timestamp, data):
     packet = {"IP": ip, "TYPE": typename, "TIMESTAMP": timestamp, "DATA": data}
     return json.dumps(packet)
+
+
+def get_current_timestamp():
+    ts = datetime.now().timestamp() * 1000
+    ts = math.floor(ts)
+    return ts
 
 
 if __name__ == '__main__':
