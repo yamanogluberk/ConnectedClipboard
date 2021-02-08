@@ -6,6 +6,10 @@ ConnectedClipboard is a local network application for Mac/Windows and Android. I
 
 *For Android* : You can easily install the APK to your phone and start using it.
 
+## Authors
+
+- Berk Yamanoglu
+- Emirhan Sarac
 
 ## Installation
 
