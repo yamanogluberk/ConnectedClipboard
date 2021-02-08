@@ -539,7 +539,7 @@ def get_json_ts(typename, timestamp, data):
     packet = {"IP": ip, "TYPE": typename, "TIMESTAMP": timestamp, "DATA": data}
     return json.dumps(packet)
 
-
+  
 def get_current_timestamp():
     ts = datetime.now().timestamp() * 1000
     ts = math.floor(ts)
