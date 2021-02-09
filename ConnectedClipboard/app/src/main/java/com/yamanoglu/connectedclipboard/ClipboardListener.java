@@ -268,7 +268,6 @@ public class ClipboardListener extends Service {
                 lastClipboardData = Utils.GetDataAsStringFromJSON(receivedJson);
                 ClipData clip = ClipData.newPlainText("simple text", lastClipboardData);
                 mClipboardManager.setPrimaryClip(clip);
-                Toast.makeText(this, "New Clipboard data received!", Toast.LENGTH_SHORT).show();
             }
         }
     }
